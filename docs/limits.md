@@ -29,7 +29,7 @@ closes the session, as section 8.7 requires.
 
 | Field | Default | Range | What it bounds |
 |---|---|---|---|
-| `OriginConfig.MaxTracks` | 1000 | 1 to 1000000 | Open tracks in an `Origin` |
+| `OriginConfig.MaxTracks` | 0 (no cap) | 0 or more | Open tracks in an `Origin`, if you set a cap. Only the local publisher creates tracks, and each track's cache is already bounded by `CacheBytes`. A `secobj.Sender` opens one key track per member |
 | `OriginConfig.MaxObjectSize` | 16 MiB | 1 KiB to 1 GiB | An object payload written to the origin |
 | `TrackOptions.Priority` | 128 (`DefaultPriority`) | 0 to 255 | Publisher priority; lower is more urgent |
 | `TrackOptions.CacheGroups` | 16 | 1 to 1000000 | Newest groups kept for FETCH and late joiners |
@@ -76,8 +76,8 @@ subscriber for forwarded fetches.
 |---|---|---|---|
 | `KeyringConfig.Retain` | 450ms | up to 1m | How long a replaced key still opens objects after the first object under its successor; kolo-media's playout drops later frames anyway |
 | `KeyringConfig.RetainMax` | `Retain` plus 400ms | `Retain` to 2m | How long a replaced key opens objects at most after its successor arrived, even if no object under the successor opens; 400 ms is kolo-media's hold for objects whose key is in flight |
-| `KeyringConfig.MaxSenders` | 64 | 1 to 1024 | Namespaces a Keyring holds keys for; more `Receive` calls fail with `ErrTooManySenders` |
-| `KeyringConfig.MaxKeyRate` | 64 per second | 1 to 1024 | Key messages per namespace per second; more are dropped and counted in `Stats` |
+| `KeyringConfig.MaxSenders` | 0 (no cap) | 0 or more | Namespaces a Keyring holds keys for, if you set a cap; more `Receive` calls fail with `ErrTooManySenders`. Your application chooses which senders it receives, so no peer can add one |
+| `KeyringConfig.MaxKeyRate` | 64 per second | 1 to 1024 | Key messages per namespace per second; more are dropped and counted in `Stats`. A message costs 0.35 us to install, and the next object of each track re-derives its key at 2.7 us (Go benchmark, Apple M5, Go 1.27.4), up to 1024 tracks: 2.8 ms a message in the worst case, 0.18 of a core per namespace at 64 a second. Raise it only if a sender rotates faster, for example one `SetMembers` per join in a large call, or batch the joins in one `SetMembers` call |
 | `KeyringConfig.ReplayGroups` | 64 | 1 to 1000000 | Groups an `Opener` accepts behind the newest of a Key ID |
 | `KeyringConfig.ReplayObjects` | 8192 | 1 to 1000000 | Entries of an `Opener`'s replay window, oldest groups dropped first |
 | `SenderConfig.MaxTracks` | 1024 | 1 to 1000000 | Tracks sealed under one key; one more rotates |

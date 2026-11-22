@@ -35,7 +35,7 @@ type source interface {
 
 // OriginConfig sets the limits of an Origin. A zero field takes its default.
 type OriginConfig struct {
-	// MaxTracks caps the open tracks. Default 1000, from 1 to 1000000.
+	// MaxTracks caps the open tracks. Default 0, no cap: only the local publisher creates tracks.
 	MaxTracks int
 	// MaxObjectSize caps an object payload, in bytes. Default 16 MiB, from 1 KiB to 1 GiB.
 	MaxObjectSize int
@@ -65,8 +65,8 @@ func NewOrigin(cfg *OriginConfig) (*Origin, error) {
 	if cfg != nil {
 		c = *cfg
 	}
-	if err := (limit[int]{"MaxTracks", 1000, 1, 1_000_000}).apply(&c.MaxTracks); err != nil {
-		return nil, err
+	if c.MaxTracks < 0 {
+		return nil, fmt.Errorf("%w: MaxTracks %d is negative", ErrInvalidConfig, c.MaxTracks)
 	}
 	if err := (limit[int]{"MaxObjectSize", 16 << 20, 1 << 10, 1 << 30}).apply(&c.MaxObjectSize); err != nil {
 		return nil, err
@@ -113,7 +113,7 @@ func (o *Origin) CreateTrack(ns Namespace, name string, opts *TrackOptions) (*Tr
 	if _, ok := o.tracks[t.key]; ok {
 		return nil, ErrTrackExists
 	}
-	if len(o.tracks) >= o.maxTracks {
+	if o.maxTracks > 0 && len(o.tracks) >= o.maxTracks {
 		return nil, ErrTooManyTracks
 	}
 	o.tracks[t.key] = t

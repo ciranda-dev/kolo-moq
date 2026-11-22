@@ -25,6 +25,6 @@ var (
 	ErrUnauthorized = errors.New("kolomoq: secobj: unauthorized key message")
 	// ErrInvalidConfig means a configuration field is out of range.
 	ErrInvalidConfig = errors.New("kolomoq: secobj: invalid config")
-	// ErrTooManySenders means a Keyring already holds keys for MaxSenders namespaces.
+	// ErrTooManySenders means a Keyring already holds keys for the MaxSenders namespaces it is capped at.
 	ErrTooManySenders = errors.New("kolomoq: secobj: too many senders")
 )

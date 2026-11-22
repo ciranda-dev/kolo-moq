@@ -30,7 +30,7 @@ var (
 	ErrNewGroupTooSoon = errors.New("kolomoq: new group requested too soon")
 	// ErrTrackExists means the origin already has a track with this name.
 	ErrTrackExists = errors.New("kolomoq: track exists")
-	// ErrTooManyTracks means the origin holds MaxTracks tracks.
+	// ErrTooManyTracks means the origin holds the MaxTracks tracks it is capped at.
 	ErrTooManyTracks = errors.New("kolomoq: too many tracks")
 	// ErrObjectTooLarge means an object is larger than MaxObjectSize.
 	ErrObjectTooLarge = errors.New("kolomoq: object too large")

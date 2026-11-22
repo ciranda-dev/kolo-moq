@@ -21,9 +21,8 @@ const (
 	// defaultHold is kolo-media's playout MaxDelay, how long it holds an object whose key is in
 	// flight: objects under a new key may trail its key message by that much.
 	defaultHold = 400 * time.Millisecond
-	// defaultMaxSenders and defaultMaxKeyRate follow kolo-swarm's MaxPeers of 64, each peer
-	// changing at most once per second (its RetryMin).
-	defaultMaxSenders = 64
+	// defaultMaxKeyRate: a key message costs 0.35 us to install and up to maxTrackKeys track key
+	// derivations of 2.7 us each (Apple M5), so 64 a second is at most 0.18 of a core per namespace.
 	defaultMaxKeyRate = 64
 	// maxTrackKeys caps the tracks with derived keys per namespace.
 	maxTrackKeys = 1024
@@ -39,7 +38,7 @@ type KeyringConfig struct {
 	Retain time.Duration
 	// RetainMax is how long a replaced key opens objects at most after its successor arrived, even if no object under the successor opens. Default Retain plus 400ms, from Retain to 2m.
 	RetainMax time.Duration
-	// MaxSenders caps the namespaces with keys. Default 64, from 1 to 1024.
+	// MaxSenders caps the namespaces with keys. Default 0, no cap: the application picks the senders it receives.
 	MaxSenders int
 	// MaxKeyRate caps key messages per namespace per second; more are dropped. Default 64, from 1 to 1024.
 	MaxKeyRate int
@@ -128,12 +127,14 @@ func NewKeyring(cfg KeyringConfig) (*Keyring, error) {
 	if cfg.RetainMax < cfg.Retain || cfg.RetainMax > 2*time.Minute {
 		return nil, fmt.Errorf("%w: RetainMax %v out of range [%v, 2m0s]", ErrInvalidConfig, cfg.RetainMax, cfg.Retain)
 	}
+	if cfg.MaxSenders < 0 {
+		return nil, fmt.Errorf("%w: MaxSenders %d is negative", ErrInvalidConfig, cfg.MaxSenders)
+	}
 	for _, l := range []struct {
 		name          string
 		v             *int
 		def, min, max int
 	}{
-		{"MaxSenders", &cfg.MaxSenders, defaultMaxSenders, 1, 1024},
 		{"MaxKeyRate", &cfg.MaxKeyRate, defaultMaxKeyRate, 1, 1024},
 		{"ReplayGroups", &cfg.ReplayGroups, defaultReplayGroups, 1, 1_000_000},
 		{"ReplayObjects", &cfg.ReplayObjects, defaultReplayObjects, 1, 1_000_000},
@@ -216,14 +217,14 @@ func (k *Keyring) Receive(ctx context.Context, s *kolomoq.Session, self ed25519.
 	}
 }
 
-// join registers a receiver of ns, creating its state within MaxSenders.
+// join registers a receiver of ns, creating its state unless MaxSenders is set and reached.
 func (k *Keyring) join(ns kolomoq.Namespace, r *receiver) (*senderKeys, error) {
 	key := nsKey(ns)
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	e := k.senders[key]
 	if e == nil {
-		if len(k.senders) >= k.maxSenders {
+		if k.maxSenders > 0 && len(k.senders) >= k.maxSenders {
 			return nil, ErrTooManySenders
 		}
 		e = &senderKeys{ns: slices.Clone(ns), tracks: map[string]uint64{}, receivers: map[*receiver]struct{}{}}

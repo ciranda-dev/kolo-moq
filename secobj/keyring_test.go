@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"reflect"
 	"runtime"
 	"slices"
@@ -898,6 +899,16 @@ func TestDeliverClearsMessage(t *testing.T) {
 	}
 }
 
+func TestKeyringManySenders(t *testing.T) {
+	k := newKeyring(t, KeyringConfig{})
+	r := &receiver{cancel: func() {}}
+	for i := range 200 {
+		if _, err := k.join(kolomoq.Namespace{"room", fmt.Sprint(i)}, r); err != nil {
+			t.Fatalf("sender %d with no cap: %v", i, err)
+		}
+	}
+}
+
 func TestMaxSenders(t *testing.T) {
 	k := newKeyring(t, KeyringConfig{MaxSenders: 2})
 	r := &receiver{cancel: func() {}}
@@ -1158,7 +1169,7 @@ func TestKeyringConfig(t *testing.T) {
 	if k := newKeyring(t, KeyringConfig{Authorize: auth, Retain: time.Minute}); k.retainMax != time.Minute+400*time.Millisecond {
 		t.Fatalf("RetainMax %v with Retain 1m", k.retainMax)
 	}
-	if k.retain != defaultRetain || k.maxSenders != 64 || k.maxKeyRate != 64 || k.replayGroups != 64 || k.replayObjects != 8192 {
+	if k.retain != defaultRetain || k.maxSenders != 0 || k.maxKeyRate != 64 || k.replayGroups != 64 || k.replayObjects != 8192 {
 		t.Fatalf("defaults %v %d %d %d %d", k.retain, k.maxSenders, k.maxKeyRate, k.replayGroups, k.replayObjects)
 	}
 	for name, cfg := range map[string]KeyringConfig{
@@ -1168,7 +1179,6 @@ func TestKeyringConfig(t *testing.T) {
 		"Retain over 1m":         {Authorize: auth, Retain: time.Minute + 1},
 		"RetainMax below Retain": {Authorize: auth, Retain: time.Second, RetainMax: time.Second - 1},
 		"RetainMax over 2m":      {Authorize: auth, RetainMax: 2*time.Minute + 1},
-		"MaxSenders 1025":        {Authorize: auth, MaxSenders: 1025},
 		"MaxSenders -1":          {Authorize: auth, MaxSenders: -1},
 		"MaxKeyRate 1025":        {Authorize: auth, MaxKeyRate: 1025},
 		"ReplayGroups -1":        {Authorize: auth, ReplayGroups: -1},
@@ -1180,7 +1190,7 @@ func TestKeyringConfig(t *testing.T) {
 	}
 	for name, cfg := range map[string]KeyringConfig{
 		"bounds low":  {Authorize: auth, Retain: 1, RetainMax: 1, MaxSenders: 1, MaxKeyRate: 1, ReplayGroups: 1, ReplayObjects: 1},
-		"bounds high": {Authorize: auth, Retain: time.Minute, RetainMax: 2 * time.Minute, MaxSenders: 1024, MaxKeyRate: 1024, ReplayGroups: 1_000_000, ReplayObjects: 1_000_000},
+		"bounds high": {Authorize: auth, Retain: time.Minute, RetainMax: 2 * time.Minute, MaxSenders: 1 << 30, MaxKeyRate: 1024, ReplayGroups: 1_000_000, ReplayObjects: 1_000_000},
 	} {
 		if _, err := NewKeyring(cfg); err != nil {
 			t.Errorf("%s: %v", name, err)
