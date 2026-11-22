@@ -37,6 +37,8 @@ type Config struct {
 	MaxBufferedGroups int
 	// MaxBufferedBytes caps the payload bytes queued for one subscription, on either side. Default 32 MiB or MaxObjectSize if larger, from MaxObjectSize to 64 GiB.
 	MaxBufferedBytes int64
+	// MaxSessionBufferedBytes caps the payload bytes queued for all of the session's subscriptions together, on either side, so MaxSubscriptions times MaxBufferedBytes is not the memory bound. The subscription that goes over drops its oldest groups. Default eight times MaxBufferedBytes, from MaxBufferedBytes to 64 GiB.
+	MaxSessionBufferedBytes int64
 	// MaxNamespaces caps the namespaces one namespace subscription tracks, on either side. Default 1000, from 1 to 1000000.
 	MaxNamespaces int
 	// MaxFetchBytes caps the bytes of cached objects held at once for the peer's FETCHes and fills, and in a relay the objects it buffers for the peer's forwarded FETCHes. A FETCH beyond it is refused with EXCESSIVE_LOAD, a fill is skipped and a forwarded FETCH is reset. Default MaxBufferedBytes, from MaxObjectSize to 64 GiB.
@@ -83,6 +85,9 @@ func (c *Config) resolve() (Config, error) {
 		}
 	}
 	if err := (limit[int64]{"MaxBufferedBytes", max(32<<20, int64(out.MaxObjectSize)), int64(out.MaxObjectSize), 64 << 30}).apply(&out.MaxBufferedBytes); err != nil {
+		return out, err
+	}
+	if err := (limit[int64]{"MaxSessionBufferedBytes", min(8*out.MaxBufferedBytes, 64<<30), out.MaxBufferedBytes, 64 << 30}).apply(&out.MaxSessionBufferedBytes); err != nil {
 		return out, err
 	}
 	if err := (limit[int64]{"MaxFetchBytes", out.MaxBufferedBytes, int64(out.MaxObjectSize), 64 << 30}).apply(&out.MaxFetchBytes); err != nil {

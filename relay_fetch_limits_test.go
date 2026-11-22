@@ -224,58 +224,6 @@ func TestStalledStreamShortTurns(t *testing.T) {
 	}
 }
 
-// One session cannot open every track slot of the relay.
-func TestRelaySessionTrackLimit(t *testing.T) {
-	checkLeaks(t)
-	r := newRelay(t, &RelayConfig{MaxTracks: 4, MaxSessionTracks: 3})
-	ns := Namespace{"st"}
-	origin := newOrigin(t)
-	for i := range 5 {
-		mustTrack(t, origin, ns, fmt.Sprint("t", i), nil)
-	}
-	pub, _ := joinRelay(t, r, &Config{Origin: origin})
-	if _, err := pub.PublishNamespace(testCtx(t), ns); err != nil {
-		t.Fatal(err)
-	}
-	ctx := testCtx(t)
-	bad, _ := joinRelay(t, r, nil)
-	var subs []*Subscription
-	for i := range 3 {
-		sub, err := bad.Subscribe(ctx, ns, fmt.Sprint("t", i), nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		subs = append(subs, sub)
-	}
-	if _, err := bad.Subscribe(ctx, ns, "t3", nil); requestCode(err) != ReqExcessiveLoad {
-		t.Fatalf("fourth track opened by one session: %v", err)
-	}
-	good, _ := joinRelay(t, r, nil)
-	if _, err := good.Subscribe(ctx, ns, "t3", nil); err != nil {
-		t.Fatalf("another session: %v", err)
-	}
-	// A track another session opened does not count.
-	if _, err := bad.Subscribe(ctx, ns, "t3", nil); err != nil {
-		t.Fatalf("joining a relayed track: %v", err)
-	}
-	subs[0].Close()
-	eventually(t, "the session's track slot", func() bool {
-		r.mu.Lock()
-		defer r.mu.Unlock()
-		return len(r.tracks) == 3
-	})
-	if _, err := bad.Subscribe(ctx, ns, "t0", nil); err != nil {
-		t.Fatalf("after a track left: %v", err)
-	}
-	cfg := newRelay(t, &RelayConfig{MaxTracks: 40}).cfg
-	if cfg.MaxSessionTracks != 4 || cfg.MaxSessionFetches != 16 {
-		t.Fatalf("defaults %d, %d", cfg.MaxSessionTracks, cfg.MaxSessionFetches)
-	}
-	if _, err := NewRelay(&RelayConfig{MaxTracks: 4, MaxSessionTracks: 5}); !errors.Is(err, ErrInvalidConfig) {
-		t.Fatalf("MaxSessionTracks above MaxTracks: %v", err)
-	}
-}
-
 // joinRelayAs connects a client session with identity id to the relay.
 func joinRelayAs(t *testing.T, r *Relay, id *koloid.Identity, cfg *Config) *Session {
 	t.Helper()

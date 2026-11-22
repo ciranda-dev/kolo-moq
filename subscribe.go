@@ -584,7 +584,7 @@ func (sub *Subscription) ReadObject(ctx context.Context) (Object, error) {
 			q := sub.queue[0]
 			sub.queue[0] = queued{}
 			sub.queue = sub.queue[1:]
-			sub.bytes -= q.size
+			sub.addBytes(-q.size)
 			o := q.Object
 			if sub.groups[o.Group]--; sub.groups[o.Group] == 0 {
 				delete(sub.groups, o.Group)
@@ -723,7 +723,8 @@ func (sub *Subscription) update(ctx context.Context, prm *wire.MessageParams) er
 // ErrClosed.
 func (sub *Subscription) Close() error {
 	sub.mu.Lock()
-	sub.queue, sub.bytes = nil, 0
+	sub.addBytes(-sub.bytes)
+	sub.queue = nil
 	clear(sub.groups)
 	sub.finishLocked(ErrClosed)
 	sub.mu.Unlock()
@@ -782,9 +783,9 @@ func (sub *Subscription) push(o *wire.Object, first bool) {
 	}
 	n := objectSize(o)
 	sub.queue = append(sub.queue, queued{objectFromWire(o), n})
-	sub.bytes += n
+	sub.addBytes(n)
 	sub.groups[o.Group]++
-	for len(sub.groups) > cfg.MaxBufferedGroups || sub.bytes > cfg.MaxBufferedBytes {
+	for len(sub.groups) > 0 && (len(sub.groups) > cfg.MaxBufferedGroups || sub.bytes > cfg.MaxBufferedBytes || sub.s.buffered.Load() > cfg.MaxSessionBufferedBytes) {
 		oldest := uint64(math.MaxUint64)
 		for g := range sub.groups {
 			oldest = min(oldest, g)
@@ -794,11 +795,17 @@ func (sub *Subscription) push(o *wire.Object, first bool) {
 	sub.notify()
 }
 
+// addBytes counts n more bytes (or fewer, if negative) queued for this subscription and for its session. Called with sub.mu held.
+func (sub *Subscription) addBytes(n int64) {
+	sub.bytes += n
+	sub.s.buffered.Add(n)
+}
+
 func (sub *Subscription) dropGroup(g uint64) {
 	kept := sub.queue[:0]
 	for _, o := range sub.queue {
 		if o.Group == g {
-			sub.bytes -= o.size
+			sub.addBytes(-o.size)
 			continue
 		}
 		kept = append(kept, o)
