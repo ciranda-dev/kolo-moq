@@ -93,7 +93,7 @@ type TrackOptions struct {
 	ObjectDeliveryTimeout time.Duration
 	// CacheGroups caps the newest groups kept for FETCH and late joiners. Default 16, from 1 to 1000000.
 	CacheGroups int
-	// CacheBytes caps the payload bytes kept, in bytes. Default 32 MiB, from 1 KiB to 64 GiB.
+	// CacheBytes caps the payload bytes kept, in bytes. Default 32 MiB, at least 1 KiB.
 	CacheBytes int64
 	// Properties are extra track properties sent to subscribers; types 0x02, 0x06, 0x0E and 0x22 are set from the fields above.
 	Properties []Property
@@ -457,7 +457,7 @@ func newTrack(ns Namespace, name string, opts *TrackOptions, maxObject int) (*tr
 	if err := (limit[int]{"CacheGroups", 16, 1, 1_000_000}).apply(&o.CacheGroups); err != nil {
 		return nil, err
 	}
-	if err := (limit[int64]{"CacheBytes", 32 << 20, 1 << 10, 64 << 30}).apply(&o.CacheBytes); err != nil {
+	if err := (limit[int64]{"CacheBytes", 32 << 20, 1 << 10, maxBudgetBytes}).apply(&o.CacheBytes); err != nil {
 		return nil, err
 	}
 	if err := checkProperties(o.Properties); err != nil {

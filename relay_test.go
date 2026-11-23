@@ -331,7 +331,7 @@ func TestRelayConfig(t *testing.T) {
 	if _, err := NewRelay(&RelayConfig{Session: Config{Origin: newOrigin(t)}}); !errors.Is(err, ErrInvalidConfig) {
 		t.Fatal(err)
 	}
-	for _, cfg := range []RelayConfig{{MaxCacheBytes: -1}, {CacheBytes: 1 << 20, MaxCacheBytes: 1 << 20}, {MaxCacheBytes: 2 << 40}} {
+	for _, cfg := range []RelayConfig{{MaxCacheBytes: -1}, {CacheBytes: 1 << 20, MaxCacheBytes: 1 << 20}, {MaxCacheBytes: maxBudgetBytes + 1}} {
 		if _, err := NewRelay(&cfg); !errors.Is(err, ErrInvalidConfig) {
 			t.Fatalf("%+v: %v", cfg, err)
 		}

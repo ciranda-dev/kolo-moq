@@ -23,7 +23,7 @@ type RelayConfig struct {
 	Session Config
 	// MaxCacheBytes caps the memory of all relayed tracks together: their cached bytes, counted as for CacheBytes, and 50 KiB for each track itself (measured, see docs/limits.md).
 	// A SUBSCRIBE that would open a track beyond the budget or the session's share is refused with EXCESSIVE_LOAD; a cache that grows past either drops its oldest objects, the newest included, so a late joiner or a FETCH finds less while live subscribers still get every object.
-	// There is no cap on the number of tracks. Default 1 GiB, from CacheBytes plus 50 KiB to 1 TiB.
+	// There is no cap on the number of tracks. Default 1 GiB, at least CacheBytes plus 50 KiB.
 	MaxCacheBytes int64
 	// MaxSessionCacheBytes caps what the tracks one session opened may hold of MaxCacheBytes, so one session cannot take it all. Its share is MaxCacheBytes divided by the sessions with tracks open, but at least what one track can hold (CacheBytes plus 50 KiB) and at most this.
 	// Default a tenth of MaxCacheBytes, or CacheBytes plus 50 KiB if larger, from CacheBytes plus 50 KiB to MaxCacheBytes.
@@ -167,10 +167,10 @@ func NewRelay(cfg *RelayConfig) (*Relay, error) {
 	if err := (limit[int]{"CacheGroups", 16, 1, 1_000_000}).apply(&c.CacheGroups); err != nil {
 		return nil, err
 	}
-	if err := (limit[int64]{"CacheBytes", 32 << 20, 1 << 10, 64 << 30}).apply(&c.CacheBytes); err != nil {
+	if err := (limit[int64]{"CacheBytes", 32 << 20, 1 << 10, maxBudgetBytes}).apply(&c.CacheBytes); err != nil {
 		return nil, err
 	}
-	if err := (limit[int64]{"MaxCacheBytes", max(1<<30, c.CacheBytes+relayTrackOverhead), c.CacheBytes + relayTrackOverhead, 1 << 40}).apply(&c.MaxCacheBytes); err != nil {
+	if err := (limit[int64]{"MaxCacheBytes", max(1<<30, c.CacheBytes+relayTrackOverhead), c.CacheBytes + relayTrackOverhead, maxBudgetBytes}).apply(&c.MaxCacheBytes); err != nil {
 		return nil, err
 	}
 	if err := (limit[int64]{"MaxSessionCacheBytes", max(c.MaxCacheBytes/10, c.CacheBytes+relayTrackOverhead), c.CacheBytes + relayTrackOverhead, c.MaxCacheBytes}).apply(&c.MaxSessionCacheBytes); err != nil {

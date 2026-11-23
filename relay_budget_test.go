@@ -232,10 +232,12 @@ func TestSessionBufferedBytesConfig(t *testing.T) {
 	}{
 		{Config{}, 256 << 20, true},
 		{Config{MaxBufferedBytes: 64 << 20}, 512 << 20, true},
-		{Config{MaxBufferedBytes: 64 << 30}, 64 << 30, true},
+		{Config{MaxBufferedBytes: 64 << 30}, 512 << 30, true},
 		{Config{MaxSessionBufferedBytes: 32 << 20}, 32 << 20, true},
 		{Config{MaxBufferedBytes: 64 << 20, MaxSessionBufferedBytes: 32 << 20}, 0, false},
-		{Config{MaxSessionBufferedBytes: 65 << 30}, 0, false},
+		{Config{MaxSessionBufferedBytes: 65 << 30}, 65 << 30, true},
+		{Config{MaxBufferedBytes: maxBudgetBytes}, maxBudgetBytes, true},
+		{Config{MaxSessionBufferedBytes: maxBudgetBytes + 1}, 0, false},
 	} {
 		got, err := tc.cfg.resolve()
 		if tc.ok != (err == nil) || (tc.ok && got.MaxSessionBufferedBytes != tc.want) {
@@ -243,6 +245,39 @@ func TestSessionBufferedBytesConfig(t *testing.T) {
 		}
 		if !tc.ok && !errors.Is(err, ErrInvalidConfig) {
 			t.Errorf("%+v: %v", tc.cfg, err)
+		}
+	}
+}
+
+// The byte budgets have no fixed maximum: only one derived from int64, so their counters cannot overflow.
+func TestByteBudgetsNoFixedMaximum(t *testing.T) {
+	const big = 2 << 40
+	cfg, err := (&Config{MaxBufferedBytes: big, MaxSessionBufferedBytes: big, MaxFetchBytes: big}).resolve()
+	if err != nil || cfg.MaxBufferedBytes != big || cfg.MaxSessionBufferedBytes != big || cfg.MaxFetchBytes != big {
+		t.Fatalf("session budgets of 2 TiB: %+v, %v", cfg, err)
+	}
+	r, err := NewRelay(&RelayConfig{CacheBytes: big, MaxCacheBytes: 4 * big})
+	if err != nil || r.cfg.CacheBytes != big || r.cfg.MaxCacheBytes != 4*big {
+		t.Fatalf("relay budgets of 2 and 8 TiB: %v", err)
+	}
+	if _, err := newOrigin(t).CreateTrack(Namespace{"big"}, "t", &TrackOptions{CacheBytes: big}); err != nil {
+		t.Fatalf("a track cache of 2 TiB: %v", err)
+	}
+	for name, c := range map[string]Config{
+		"MaxBufferedBytes":        {MaxBufferedBytes: maxBudgetBytes + 1},
+		"MaxSessionBufferedBytes": {MaxSessionBufferedBytes: maxBudgetBytes + 1},
+		"MaxFetchBytes":           {MaxFetchBytes: maxBudgetBytes + 1},
+	} {
+		if _, err := c.resolve(); !errors.Is(err, ErrInvalidConfig) {
+			t.Errorf("%s past the int64 headroom: %v", name, err)
+		}
+	}
+	for name, c := range map[string]RelayConfig{
+		"CacheBytes":    {CacheBytes: maxBudgetBytes + 1},
+		"MaxCacheBytes": {MaxCacheBytes: maxBudgetBytes + 1},
+	} {
+		if _, err := NewRelay(&c); !errors.Is(err, ErrInvalidConfig) {
+			t.Errorf("%s past the int64 headroom: %v", name, err)
 		}
 	}
 }

@@ -3,6 +3,7 @@ package kolomoq
 import (
 	"crypto/ed25519"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/ciranda-dev/kolo-moq/internal/wire"
@@ -35,17 +36,21 @@ type Config struct {
 	MaxNameLength int
 	// MaxBufferedGroups caps the groups queued for one subscription, on either side. Default 64, from 1 to 1000000.
 	MaxBufferedGroups int
-	// MaxBufferedBytes caps the payload bytes queued for one subscription, on either side. Default 32 MiB or MaxObjectSize if larger, from MaxObjectSize to 64 GiB.
+	// MaxBufferedBytes caps the payload bytes queued for one subscription, on either side. Default 32 MiB or MaxObjectSize if larger, at least MaxObjectSize.
 	MaxBufferedBytes int64
-	// MaxSessionBufferedBytes caps the payload bytes queued for all of the session's subscriptions together, on either side, so MaxSubscriptions times MaxBufferedBytes is not the memory bound. The subscription that holds the most drops its oldest groups, not the one that is pushing. Default eight times MaxBufferedBytes, eight subscriptions at their full size, from MaxBufferedBytes to 64 GiB.
+	// MaxSessionBufferedBytes caps the payload bytes queued for all of the session's subscriptions together, on either side, so MaxSubscriptions times MaxBufferedBytes is not the memory bound. The subscription that holds the most drops its oldest groups, not the one that is pushing. Default eight times MaxBufferedBytes, eight subscriptions at their full size, at least MaxBufferedBytes.
 	MaxSessionBufferedBytes int64
 	// MaxNamespaces caps the namespaces one namespace subscription tracks, on either side. Default 1000, from 1 to 1000000.
 	MaxNamespaces int
-	// MaxFetchBytes caps the bytes of cached objects held at once for the peer's FETCHes and fills, and in a relay the objects it buffers for the peer's forwarded FETCHes. A FETCH beyond it is refused with EXCESSIVE_LOAD, a fill is skipped and a forwarded FETCH is reset. Default MaxBufferedBytes, from MaxObjectSize to 64 GiB.
+	// MaxFetchBytes caps the bytes of cached objects held at once for the peer's FETCHes and fills, and in a relay the objects it buffers for the peer's forwarded FETCHes. A FETCH beyond it is refused with EXCESSIVE_LOAD, a fill is skipped and a forwarded FETCH is reset. Default MaxBufferedBytes, at least MaxObjectSize.
 	MaxFetchBytes int64
 
 	src source
 }
+
+// maxBudgetBytes is the most any byte budget may be, a sixteenth of the int64 range (about 512 PiB), so that a budget plus
+// the charges in flight, or eight times MaxBufferedBytes, cannot overflow its int64 counter.
+const maxBudgetBytes = math.MaxInt64 / 16
 
 type limit[T int | int64 | time.Duration] struct {
 	name          string
@@ -84,13 +89,13 @@ func (c *Config) resolve() (Config, error) {
 			return out, err
 		}
 	}
-	if err := (limit[int64]{"MaxBufferedBytes", max(32<<20, int64(out.MaxObjectSize)), int64(out.MaxObjectSize), 64 << 30}).apply(&out.MaxBufferedBytes); err != nil {
+	if err := (limit[int64]{"MaxBufferedBytes", max(32<<20, int64(out.MaxObjectSize)), int64(out.MaxObjectSize), maxBudgetBytes}).apply(&out.MaxBufferedBytes); err != nil {
 		return out, err
 	}
-	if err := (limit[int64]{"MaxSessionBufferedBytes", min(8*out.MaxBufferedBytes, 64<<30), out.MaxBufferedBytes, 64 << 30}).apply(&out.MaxSessionBufferedBytes); err != nil {
+	if err := (limit[int64]{"MaxSessionBufferedBytes", min(8*out.MaxBufferedBytes, maxBudgetBytes), out.MaxBufferedBytes, maxBudgetBytes}).apply(&out.MaxSessionBufferedBytes); err != nil {
 		return out, err
 	}
-	if err := (limit[int64]{"MaxFetchBytes", out.MaxBufferedBytes, int64(out.MaxObjectSize), 64 << 30}).apply(&out.MaxFetchBytes); err != nil {
+	if err := (limit[int64]{"MaxFetchBytes", out.MaxBufferedBytes, int64(out.MaxObjectSize), maxBudgetBytes}).apply(&out.MaxFetchBytes); err != nil {
 		return out, err
 	}
 	if out.src == nil && out.Origin != nil {
