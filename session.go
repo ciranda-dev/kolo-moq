@@ -531,6 +531,38 @@ func (s *Session) delPub(p *pubSub) {
 	s.mu.Unlock()
 }
 
+// buffer is a subscription of either side that queues payload for its session.
+type buffer interface {
+	queuedBytes() int64
+	dropOldest() bool
+}
+
+// shed drops the oldest group of the subscription that holds the most while the session is over MaxSessionBufferedBytes,
+// so a subscription nobody reads cannot make the healthy ones lose their objects.
+func (s *Session) shed() {
+	for s.buffered.Load() > s.cfg.MaxSessionBufferedBytes {
+		s.mu.Lock()
+		bufs := make([]buffer, 0, len(s.aliases)+len(s.pubs))
+		for _, sub := range s.aliases {
+			bufs = append(bufs, sub)
+		}
+		for p := range s.pubs {
+			bufs = append(bufs, p)
+		}
+		s.mu.Unlock()
+		var most buffer
+		var mostBytes int64
+		for _, b := range bufs {
+			if n := b.queuedBytes(); n > mostBytes {
+				most, mostBytes = b, n
+			}
+		}
+		if most == nil || !most.dropOldest() {
+			return
+		}
+	}
+}
+
 // GoingAway is closed when the peer sent GOAWAY: open a new session and
 // move the subscriptions there.
 func (s *Session) GoingAway() <-chan struct{} { return s.goingAway }

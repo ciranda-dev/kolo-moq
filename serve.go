@@ -523,23 +523,40 @@ func (p *pubSub) addQueued(n int64) {
 // bounds, so a slow subscriber holds bounded memory. Every open subgroup
 // stream counts toward MaxBufferedGroups.
 func (p *pubSub) enforceLimits() {
-	for p.queued > p.s.cfg.MaxBufferedBytes || p.s.buffered.Load() > p.s.cfg.MaxSessionBufferedBytes || len(p.streams) > p.s.cfg.MaxBufferedGroups {
-		oldest, found := uint64(0), false
-		for k := range p.streams {
-			if !found || k.group < oldest {
-				oldest, found = k.group, true
-			}
-		}
-		if !found {
-			return
-		}
-		for k, st := range p.streams {
-			if k.group == oldest {
-				st.kill(resetExcessiveLoad)
-			}
-		}
-		p.s.resetGroups.Add(1)
+	for (p.queued > p.s.cfg.MaxBufferedBytes || len(p.streams) > p.s.cfg.MaxBufferedGroups) && p.dropOldestLocked() {
 	}
+}
+
+func (p *pubSub) queuedBytes() int64 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.queued
+}
+
+func (p *pubSub) dropOldest() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.dropOldestLocked()
+}
+
+// dropOldestLocked resets the streams of the oldest group and reports whether there was one. Called with p.mu held.
+func (p *pubSub) dropOldestLocked() bool {
+	oldest, found := uint64(0), false
+	for k := range p.streams {
+		if !found || k.group < oldest {
+			oldest, found = k.group, true
+		}
+	}
+	if !found {
+		return false
+	}
+	for k, st := range p.streams {
+		if k.group == oldest {
+			st.kill(resetExcessiveLoad)
+		}
+	}
+	p.s.resetGroups.Add(1)
+	return true
 }
 
 // markDead keeps a subgroup from being reopened; the set holds the most

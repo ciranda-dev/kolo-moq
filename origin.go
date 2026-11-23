@@ -572,16 +572,17 @@ func (t *track) add(o *cobj) bool {
 	if o.Status == wire.StatusEndOfTrack {
 		t.final, t.finalLoc = true, loc
 	}
-	t.evict(t.maxBytes)
+	t.evict(t.maxBytes, 1)
 	if t.acct != nil {
 		if over := t.acct.charge(t.bytes - before); over > 0 {
 			held := t.bytes
-			t.evict(max(held-over, 0))
+			t.evict(max(held-over, 0), 0)
 			t.acct.charge(t.bytes - held)
 		}
 	}
 	for sub := range t.subs {
 		sub.offer(o)
+		sub.s.shed()
 	}
 	return true
 }
@@ -626,8 +627,9 @@ func immutable(kvs []wire.KV) []byte {
 }
 
 // evict drops the oldest cached groups, then the oldest objects of the last group, until the cache is within maxGroups
-// and maxBytes; the newest object always stays.
-func (t *track) evict(maxBytes int64) {
+// and maxBytes, keeping at least keep objects of the last group. A relayed track over the relay's budget keeps none:
+// subscribers already got the object, only late joiners and FETCH find less.
+func (t *track) evict(maxBytes int64, keep int) {
 	for len(t.groups) > 1 && (len(t.groups) > t.maxGroups || t.bytes > maxBytes) {
 		t.bytes -= t.groups[0].bytes
 		t.groups[0] = nil
@@ -635,7 +637,7 @@ func (t *track) evict(maxBytes int64) {
 	}
 	if len(t.groups) == 1 {
 		g := t.groups[0]
-		for t.bytes > maxBytes && len(g.objs) > 1 {
+		for t.bytes > maxBytes && len(g.objs) > keep {
 			if !g.noSub {
 				// Without the early objects the subgroup rules cannot be checked
 				// any more; stop tracking them rather than hold them without bound.
@@ -789,8 +791,12 @@ func (t *track) snapshot(start, end wire.Location, order GroupOrder) []fetchEntr
 		objs := slices.Clone(g.objs)
 		slices.SortFunc(objs, func(a, b *cobj) int { return cmpU64(a.ID, b.ID) })
 		var entries []fetchEntry
-		if g.trimmed && len(objs) > 0 && objs[0].ID > 0 {
-			loc := wire.Location{Group: g.id, Object: objs[0].ID - 1}
+		first := g.floor
+		if len(objs) > 0 {
+			first = objs[0].ID
+		}
+		if g.trimmed && first > 0 {
+			loc := wire.Location{Group: g.id, Object: first - 1}
 			if !loc.Less(start) && !end.Less(loc) {
 				entries = append(entries, fetchEntry{loc: loc})
 			}

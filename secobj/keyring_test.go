@@ -765,6 +765,19 @@ func localKeyring(t testing.TB, cfg KeyringConfig, ns kolomoq.Namespace) (*Keyri
 	return k, e, clock
 }
 
+// BenchmarkKeyInstall is the install cost behind defaultMaxKeyRate: a new Key ID replaces the current generation.
+func BenchmarkKeyInstall(b *testing.B) {
+	ns := kolomoq.Namespace{"room"}
+	k, e, _ := localKeyring(b, KeyringConfig{}, ns)
+	m := keyMessage{ns: ns}
+	for b.Loop() {
+		m.kid++
+		k.mu.Lock()
+		k.install(e, &m)
+		k.mu.Unlock()
+	}
+}
+
 func msgBytes(instance byte, kid uint64, ns kolomoq.Namespace, key byte) []byte {
 	m := keyMessage{kid: kid, ns: ns}
 	m.instance[0] = instance

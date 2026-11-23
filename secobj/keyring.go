@@ -21,8 +21,8 @@ const (
 	// defaultHold is kolo-media's playout MaxDelay, how long it holds an object whose key is in
 	// flight: objects under a new key may trail its key message by that much.
 	defaultHold = 400 * time.Millisecond
-	// defaultMaxKeyRate: a key message costs 0.35 us to install and up to maxTrackKeys track key
-	// derivations of 2.7 us each (Apple M5), so 64 a second is at most 0.18 of a core per namespace.
+	// defaultMaxKeyRate: a key message costs under 0.5 us to install and up to maxTrackKeys track key
+	// derivations of 2.7 us each at most (BenchmarkKeyInstall, BenchmarkTrackKey, Apple M5), so 64 a second is at most 0.18 of a core per namespace.
 	defaultMaxKeyRate = 64
 	// maxTrackKeys caps the tracks with derived keys per namespace.
 	maxTrackKeys = 1024

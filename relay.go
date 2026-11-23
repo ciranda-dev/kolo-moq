@@ -22,10 +22,12 @@ type RelayConfig struct {
 	// request from subscribers.
 	Session Config
 	// MaxCacheBytes caps the memory of all relayed tracks together: their cached bytes, counted as for CacheBytes, and 50 KiB for each track itself (measured, see docs/limits.md).
-	// A session's share is MaxCacheBytes divided by the sessions with tracks open, but at least what one track can hold, CacheBytes plus 50 KiB.
-	// A SUBSCRIBE that would open a track beyond the budget or the session's share is refused with EXCESSIVE_LOAD; a cache that grows past either drops its oldest objects, but never the newest.
+	// A SUBSCRIBE that would open a track beyond the budget or the session's share is refused with EXCESSIVE_LOAD; a cache that grows past either drops its oldest objects, the newest included, so a late joiner or a FETCH finds less while live subscribers still get every object.
 	// There is no cap on the number of tracks. Default 1 GiB, from CacheBytes plus 50 KiB to 1 TiB.
 	MaxCacheBytes int64
+	// MaxSessionCacheBytes caps what the tracks one session opened may hold of MaxCacheBytes, so one session cannot take it all. Its share is MaxCacheBytes divided by the sessions with tracks open, but at least what one track can hold (CacheBytes plus 50 KiB) and at most this.
+	// Default a tenth of MaxCacheBytes, or CacheBytes plus 50 KiB if larger, from CacheBytes plus 50 KiB to MaxCacheBytes.
+	MaxSessionCacheBytes int64
 	// MaxSessionFetches caps the FETCHes of one session the relay forwards to publishers at once; more are refused with EXCESSIVE_LOAD. Default 16, from 1 to 1000000.
 	MaxSessionFetches int
 	// CacheGroups and CacheBytes bound the cache of each relayed track, as in TrackOptions. Defaults 16 groups and 32 MiB.
@@ -123,9 +125,9 @@ func (a *cacheAcct) release() {
 	a.held = 0
 }
 
-// share returns the bytes of MaxCacheBytes one of n sessions may use.
+// share returns the bytes of MaxCacheBytes one of n sessions may use. Callers pass the nOpeners atomic, so admission and eviction agree.
 func (r *Relay) share(n int) int64 {
-	return max(r.cfg.MaxCacheBytes/int64(max(n, 1)), r.cfg.CacheBytes+relayTrackOverhead)
+	return min(r.cfg.MaxSessionCacheBytes, max(r.cfg.MaxCacheBytes/int64(max(n, 1)), r.cfg.CacheBytes+relayTrackOverhead))
 }
 
 // relayTrack is a track relayed from one publisher session.
@@ -169,6 +171,9 @@ func NewRelay(cfg *RelayConfig) (*Relay, error) {
 		return nil, err
 	}
 	if err := (limit[int64]{"MaxCacheBytes", max(1<<30, c.CacheBytes+relayTrackOverhead), c.CacheBytes + relayTrackOverhead, 1 << 40}).apply(&c.MaxCacheBytes); err != nil {
+		return nil, err
+	}
+	if err := (limit[int64]{"MaxSessionCacheBytes", max(c.MaxCacheBytes/10, c.CacheBytes+relayTrackOverhead), c.CacheBytes + relayTrackOverhead, c.MaxCacheBytes}).apply(&c.MaxSessionCacheBytes); err != nil {
 		return nil, err
 	}
 	if c.Resume != 0 && (c.Resume < time.Second || c.Resume > time.Hour) {
@@ -311,7 +316,7 @@ func (r *Relay) admit(s *Session) bool {
 		return false
 	}
 	o := r.openers[s]
-	return o == nil || o.bytes.Load()+relayTrackOverhead <= r.share(len(r.openers))
+	return o == nil || o.bytes.Load()+relayTrackOverhead <= r.share(int(r.nOpeners.Load()))
 }
 
 // open subscribes upstream; the relay joins at the current group so late

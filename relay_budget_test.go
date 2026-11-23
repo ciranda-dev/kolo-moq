@@ -64,7 +64,7 @@ func writeObjects(t *testing.T, tw *TrackWriter, sub *Subscription, n, size int)
 	readN(t, testCtx(t), sub, n)
 }
 
-// The relay holds more tracks than the old caps of 1000 tracks and 100 per session when their bytes fit.
+// The relay holds more tracks than the removed caps of 1000 tracks and 100 per session when their bytes fit.
 func TestRelayManyTracks(t *testing.T) {
 	checkLeaks(t)
 	r := newRelay(t, nil)
@@ -106,7 +106,7 @@ func TestRelayManyTracks(t *testing.T) {
 // bytes return when a track ends.
 func TestRelayRefusesByBytes(t *testing.T) {
 	checkLeaks(t)
-	r := newRelay(t, &RelayConfig{CacheBytes: 100 << 10, MaxCacheBytes: 6 * relayTrackOverhead})
+	r := newRelay(t, &RelayConfig{CacheBytes: 100 << 10, MaxCacheBytes: 6 * relayTrackOverhead, MaxSessionCacheBytes: 6 * relayTrackOverhead})
 	ns := Namespace{"bytes"}
 	tws := relayedTracks(t, r, ns, "t0", "t1", "t2")
 	peer, _ := joinRelay(t, r, nil)
