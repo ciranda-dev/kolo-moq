@@ -3,6 +3,7 @@ package secobj
 import (
 	"bytes"
 	"crypto/ed25519"
+	"encoding/binary"
 	"errors"
 	"reflect"
 	"slices"
@@ -137,6 +138,18 @@ func TestWriteRecreatedTrack(t *testing.T) {
 	}
 	if s.KeyID() != 1 {
 		t.Fatal("rotated for a closed group")
+	}
+}
+
+func TestSenderManyMembers(t *testing.T) {
+	s := newSender(t, newNode(t), nil)
+	members := make([]ed25519.PublicKey, 1100)
+	for i := range members {
+		members[i] = make(ed25519.PublicKey, ed25519.PublicKeySize)
+		binary.BigEndian.PutUint32(members[i], uint32(i))
+	}
+	if err := s.SetMembers(members); err != nil {
+		t.Fatalf("1100 members: %v", err)
 	}
 }
 
