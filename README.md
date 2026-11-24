@@ -128,7 +128,7 @@ group 0 object 2: hello 2
 | `TrackOptions.Readers` | Limit a track to listed peers, whatever `Authorize` decides |
 | `GroupWriter.WriteObjectFunc` | Publish an object built from its own Object ID, holding the group |
 | `KeyNamespaceField` | Reserved first namespace field for key tracks, refused by `PublishNamespace` and by a relay |
-| Package `secobj` | Objects protected end to end through relays (the Kolo profile of MoQ Secure Objects): `Sender` gives each member its key, `Keyring` receives keys, `Opener` opens a track's objects. Keys are overwritten as far as Go allows, with no guarantee that no copy remains; Go's AES-GCM is constant time only for amd64 and arm64 with AES instructions, ppc64x and s390x |
+| Package `secobj` | Objects protected end to end through relays (the Kolo profile of MoQ Secure Objects): `Sender` gives each member its key, `Keyring` receives keys, `Opener` opens a track's objects. Every member holds each sender's key and objects are not signed per sender, so a member who controls a relay can forge another member's objects. Keys are overwritten as far as Go allows, with no guarantee that no copy remains; Go's AES-GCM is constant time only for amd64 and arm64 with AES instructions, ppc64x and s390x |
 
 ## Standards
 

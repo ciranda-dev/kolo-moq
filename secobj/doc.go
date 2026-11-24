@@ -22,6 +22,12 @@
 // s390x; on 386, arm, riscv64, loong64, mips, wasm, and amd64 or arm64 CPUs
 // without AES instructions, it is generic code that is not constant time.
 //
+// Objects are authenticated as coming from a holder of the sender's key, not
+// from the sender: every member that receives a key can seal objects under
+// it, and nothing is signed per sender. A member that runs or controls a
+// relay listed in KeyringConfig.Relays, or colludes with its operator, can
+// therefore make objects that open as another member's.
+//
 // A Sender gives its key for one media namespace to each member over a key
 // track that only that member may read; a Keyring receives keys only from the
 // peer that KeyringConfig.Authorize names as the namespace owner; each reader

@@ -315,6 +315,7 @@ profile of MoQ Secure Objects; the format is in its package documentation.
   successor, and for `RetainMax` at most after its successor arrived, so a
   removed member who kept it cannot use it for long even if a relay withholds
   the newer objects. Bounds are in [limits.md](limits.md#secobj).
+- Objects are authenticated as coming from a holder of the sender's key, not from the sender: every member that receives a key can seal objects under it, and nothing is signed per sender. A member that runs or controls a relay listed in `KeyringConfig.Relays`, or colludes with its operator, can therefore make objects that open as another member's.
 
 ## Errors
 
