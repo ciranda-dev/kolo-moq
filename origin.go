@@ -419,6 +419,7 @@ type track struct {
 	maxBytes   int64
 	maxObject  int
 	relay      *relayTrack
+	acct       *cacheAcct    // charges a relayed track's cache to the relay; nil for an origin track
 	newGroup   chan struct{} // signals a subscriber's request for a new group; cap 1
 	ngMu       sync.Mutex
 	lastNG     time.Time // when the track last signalled a new group request
@@ -526,6 +527,7 @@ func (t *track) add(o *cobj) bool {
 	if t.ended {
 		return true
 	}
+	before := t.bytes
 	i, ok := t.groupIndex(o.Group)
 	var g *cgroup
 	if ok {
@@ -570,7 +572,14 @@ func (t *track) add(o *cobj) bool {
 	if o.Status == wire.StatusEndOfTrack {
 		t.final, t.finalLoc = true, loc
 	}
-	t.evict()
+	t.evict(t.maxBytes)
+	if t.acct != nil {
+		if over := t.acct.charge(t.bytes - before); over > 0 {
+			held := t.bytes
+			t.evict(max(held-over, 0))
+			t.acct.charge(t.bytes - held)
+		}
+	}
 	for sub := range t.subs {
 		sub.offer(o)
 	}
@@ -616,15 +625,17 @@ func immutable(kvs []wire.KV) []byte {
 	return nil
 }
 
-func (t *track) evict() {
-	for len(t.groups) > 1 && (len(t.groups) > t.maxGroups || t.bytes > t.maxBytes) {
+// evict drops the oldest cached groups, then the oldest objects of the last group, until the cache is within maxGroups
+// and maxBytes; the newest object always stays.
+func (t *track) evict(maxBytes int64) {
+	for len(t.groups) > 1 && (len(t.groups) > t.maxGroups || t.bytes > maxBytes) {
 		t.bytes -= t.groups[0].bytes
 		t.groups[0] = nil
 		t.groups = t.groups[1:]
 	}
 	if len(t.groups) == 1 {
 		g := t.groups[0]
-		for t.bytes > t.maxBytes && len(g.objs) > 1 {
+		for t.bytes > maxBytes && len(g.objs) > 1 {
 			if !g.noSub {
 				// Without the early objects the subgroup rules cannot be checked
 				// any more; stop tracking them rather than hold them without bound.

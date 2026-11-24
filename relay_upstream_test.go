@@ -202,7 +202,7 @@ func settle() (goroutines int, heap uint64) {
 // goroutines and heap return to the baseline.
 func TestRelayReleaseReturnsToBaseline(t *testing.T) {
 	checkLeaks(t)
-	r := newRelay(t, &RelayConfig{MaxTracks: 1000, MaxSessionTracks: 1000})
+	r := newRelay(t, nil)
 	ns := Namespace{"base"}
 	origin := newOrigin(t)
 	const tracks = 150

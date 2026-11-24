@@ -508,16 +508,22 @@ func (p *pubSub) offer(o *cobj) {
 	}
 	st.last = o.ID
 	st.queue = append(st.queue, o)
-	p.queued += o.size()
+	p.addQueued(o.size())
 	st.signal()
 	p.enforceLimits()
+}
+
+// addQueued counts n more bytes (or fewer, if negative) queued for this subscriber and for its session. Called with p.mu held.
+func (p *pubSub) addQueued(n int64) {
+	p.queued += n
+	p.s.buffered.Add(n)
 }
 
 // enforceLimits resets the oldest groups while the queue is over its
 // bounds, so a slow subscriber holds bounded memory. Every open subgroup
 // stream counts toward MaxBufferedGroups.
 func (p *pubSub) enforceLimits() {
-	for p.queued > p.s.cfg.MaxBufferedBytes || len(p.streams) > p.s.cfg.MaxBufferedGroups {
+	for p.queued > p.s.cfg.MaxBufferedBytes || p.s.buffered.Load() > p.s.cfg.MaxSessionBufferedBytes || len(p.streams) > p.s.cfg.MaxBufferedGroups {
 		oldest, found := uint64(0), false
 		for k := range p.streams {
 			if !found || k.group < oldest {
@@ -1027,7 +1033,7 @@ func (st *outStream) kill(code uint64) {
 	p := st.p
 	st.dead = true
 	for _, o := range st.queue {
-		p.queued -= o.size()
+		p.addQueued(-o.size())
 	}
 	st.queue = nil
 	if p.streams[st.key] == st {
@@ -1058,7 +1064,7 @@ func (st *outStream) next() (o *cobj, fin, stop bool) {
 			o = st.queue[0]
 			st.queue[0] = nil
 			st.queue = st.queue[1:]
-			p.queued -= o.size()
+			p.addQueued(-o.size())
 			st.sending = o.at
 			return o, false, false
 		case st.finished:
@@ -1084,16 +1090,7 @@ func (st *outStream) run() {
 	p, s := st.p, st.p.s
 	defer func() {
 		p.mu.Lock()
-		if !st.dead {
-			st.dead = true
-			if p.streams[st.key] == st {
-				delete(p.streams, st.key)
-			}
-			p.markDead(st.key)
-			if st.stream != nil && !st.completed {
-				st.stream.CancelWrite(resetInternalError)
-			}
-		}
+		st.kill(resetInternalError)
 		st.cancel()
 		p.writerDone()
 		p.mu.Unlock()

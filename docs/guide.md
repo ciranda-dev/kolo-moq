@@ -241,8 +241,8 @@ an End of Unknown Range marker instead of a false "does not exist".
   publisher again, so a track the publisher ended and created again under
   the same name is served as the new track, and the subscribers of the
   ended one get its last objects and its end. An ended track counts against
-  `MaxTracks` and `MaxSessionTracks` until its upstream subscription ends or
-  its last subscriber leaves. A SUBSCRIBE that reaches the relay before
+  `MaxCacheBytes` until its upstream subscription ends or its last
+  subscriber leaves. A SUBSCRIBE that reaches the relay before
   either end signal joins the ended track and gets its end: a track name
   does not tell two tracks apart, so a subscriber that knows of a newer one
   subscribes again.
@@ -254,10 +254,11 @@ an End of Unknown Range marker instead of a false "does not exist".
   `INTERNAL_ERROR` also covers other upstream failures. A FETCH or
   TRACK_STATUS for a track the relay does not hold is forwarded to the
   publisher.
-- A relay is configured with `RelayConfig`. `MaxTracks` caps the tracks
-  relayed at once and `MaxSessionTracks` the tracks one session opened (a
-  SUBSCRIBE beyond either gets `EXCESSIVE_LOAD`), so one subscriber cannot
-  use every slot. `MaxSessionFetches` caps the FETCHes of one session
+- A relay is configured with `RelayConfig`. `MaxCacheBytes` is the memory
+  of all relayed tracks together, cached objects and a fixed cost for each
+  track, and each session may use its share of it (a SUBSCRIBE beyond
+  either gets `EXCESSIVE_LOAD`), so one subscriber cannot use it all. There
+  is no cap on the number of tracks. `MaxSessionFetches` caps the FETCHes of one session
   forwarded to publishers at once. A forwarded FETCH is read at once into a
   buffer within the subscriber session's `MaxFetchBytes` (set in
   `RelayConfig.Session`), and reset with `EXCESSIVE_LOAD` when it overflows,

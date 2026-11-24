@@ -21,10 +21,11 @@ type RelayConfig struct {
 	// Its Authorize hook decides PUBLISH_NAMESPACE from publishers and every
 	// request from subscribers.
 	Session Config
-	// MaxTracks caps the tracks relayed at once. Default 1000, from 1 to 1000000.
-	MaxTracks int
-	// MaxSessionTracks caps the relayed tracks that one session's SUBSCRIBEs opened and that are still relayed; more are refused with EXCESSIVE_LOAD. Default MaxTracks / 10 (at least 1), from 1 to MaxTracks.
-	MaxSessionTracks int
+	// MaxCacheBytes caps the memory of all relayed tracks together: their cached bytes, counted as for CacheBytes, and 50 KiB for each track itself (measured, see docs/limits.md).
+	// A session's share is MaxCacheBytes divided by the sessions with tracks open, but at least what one track can hold, CacheBytes plus 50 KiB.
+	// A SUBSCRIBE that would open a track beyond the budget or the session's share is refused with EXCESSIVE_LOAD; a cache that grows past either drops its oldest objects, but never the newest.
+	// There is no cap on the number of tracks. Default 1 GiB, from CacheBytes plus 50 KiB to 1 TiB.
+	MaxCacheBytes int64
 	// MaxSessionFetches caps the FETCHes of one session the relay forwards to publishers at once; more are refused with EXCESSIVE_LOAD. Default 16, from 1 to 1000000.
 	MaxSessionFetches int
 	// CacheGroups and CacheBytes bound the cache of each relayed track, as in TrackOptions. Defaults 16 groups and 32 MiB.
@@ -60,8 +61,9 @@ type Relay struct {
 	announce map[*announcement]struct{}
 	seq      uint64
 	tracks   map[string]*relayTrack // the current instance of each track
-	live     int                    // relayed tracks counted against MaxTracks, ended ones included
-	opened   map[*Session]int       // relayed tracks per session that opened them
+	openers  map[*Session]*opener   // sessions with relayed tracks, ended ones included
+	cached   atomic.Int64           // bytes charged to MaxCacheBytes
+	nOpeners atomic.Int64           // len(openers), for the lock-free share
 	watchers map[*nsWatcher]struct{}
 	held     *list.List     // announcements kept for ended sessions, oldest first
 	heldBy   map[string]int // held announcements per peer key
@@ -80,6 +82,52 @@ type announcement struct {
 	gone  bool          // released
 }
 
+// relayTrackOverhead is the heap one relayed track costs beyond its cached objects: its upstream and downstream
+// subscriptions and their goroutines, 50,000 bytes measured by TestMeasureRelayHeap.
+const relayTrackOverhead = 50 << 10
+
+// opener is what the SUBSCRIBEs of one session opened.
+type opener struct {
+	tracks int          // relayed tracks still counted; guarded by Relay.mu
+	bytes  atomic.Int64 // their charge against MaxCacheBytes
+}
+
+// cacheAcct charges one relayed track to the relay's budget and to the session that opened it.
+type cacheAcct struct {
+	r *Relay
+	o *opener
+
+	mu   sync.Mutex
+	held int64
+	done bool // released: later charges are ignored
+}
+
+// charge adds delta to the track's charge and returns how many bytes the relay or the session is now over its budget.
+func (a *cacheAcct) charge(delta int64) int64 {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.done {
+		return 0
+	}
+	a.held += delta
+	total, mine := a.r.cached.Add(delta), a.o.bytes.Add(delta)
+	return max(total-a.r.cfg.MaxCacheBytes, mine-a.r.share(int(a.r.nOpeners.Load())), 0)
+}
+
+func (a *cacheAcct) release() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.done = true
+	a.r.cached.Add(-a.held)
+	a.o.bytes.Add(-a.held)
+	a.held = 0
+}
+
+// share returns the bytes of MaxCacheBytes one of n sessions may use.
+func (r *Relay) share(n int) int64 {
+	return max(r.cfg.MaxCacheBytes/int64(max(n, 1)), r.cfg.CacheBytes+relayTrackOverhead)
+}
+
 // relayTrack is a track relayed from one publisher session.
 type relayTrack struct {
 	r      *Relay
@@ -93,6 +141,7 @@ type relayTrack struct {
 	// Guarded by r.mu.
 	refs    int
 	counted bool
+	acct    *cacheAcct
 	t       *track
 	up      *Subscription
 }
@@ -110,12 +159,6 @@ func NewRelay(cfg *RelayConfig) (*Relay, error) {
 	if c.Session, err = c.Session.resolve(); err != nil {
 		return nil, err
 	}
-	if err := (limit[int]{"MaxTracks", 1000, 1, 1_000_000}).apply(&c.MaxTracks); err != nil {
-		return nil, err
-	}
-	if err := (limit[int]{"MaxSessionTracks", max(1, c.MaxTracks/10), 1, c.MaxTracks}).apply(&c.MaxSessionTracks); err != nil {
-		return nil, err
-	}
 	if err := (limit[int]{"MaxSessionFetches", 16, 1, 1_000_000}).apply(&c.MaxSessionFetches); err != nil {
 		return nil, err
 	}
@@ -123,6 +166,9 @@ func NewRelay(cfg *RelayConfig) (*Relay, error) {
 		return nil, err
 	}
 	if err := (limit[int64]{"CacheBytes", 32 << 20, 1 << 10, 64 << 30}).apply(&c.CacheBytes); err != nil {
+		return nil, err
+	}
+	if err := (limit[int64]{"MaxCacheBytes", max(1<<30, c.CacheBytes+relayTrackOverhead), c.CacheBytes + relayTrackOverhead, 1 << 40}).apply(&c.MaxCacheBytes); err != nil {
 		return nil, err
 	}
 	if c.Resume != 0 && (c.Resume < time.Second || c.Resume > time.Hour) {
@@ -138,7 +184,7 @@ func NewRelay(cfg *RelayConfig) (*Relay, error) {
 		cfg:      c,
 		announce: map[*announcement]struct{}{},
 		tracks:   map[string]*relayTrack{},
-		opened:   map[*Session]int{},
+		openers:  map[*Session]*opener{},
 		watchers: map[*nsWatcher]struct{}{},
 		held:     list.New(),
 		heldBy:   map[string]int{},
@@ -228,14 +274,20 @@ func (r *Relay) acquire(ctx context.Context, s *Session, kind RequestKind, ns Na
 		case kind != KindSubscribe:
 			r.mu.Unlock()
 			return nil, errUpstream{pub, r}
-		case r.live >= r.cfg.MaxTracks, r.opened[s] >= r.cfg.MaxSessionTracks:
+		case !r.admit(s):
 			r.mu.Unlock()
 			return nil, &RequestError{Code: ReqExcessiveLoad}
 		}
-		rt = &relayTrack{r: r, key: key, opener: s, ready: make(chan struct{}), counted: true}
+		o := r.openers[s]
+		if o == nil {
+			o = &opener{}
+			r.openers[s] = o
+			r.nOpeners.Add(1)
+		}
+		o.tracks++
+		rt = &relayTrack{r: r, key: key, opener: s, ready: make(chan struct{}), counted: true, acct: &cacheAcct{r: r, o: o}}
+		rt.acct.charge(relayTrackOverhead)
 		r.tracks[key] = rt
-		r.live++
-		r.opened[s]++
 		go rt.open(pub, ns, name)
 	}
 	rt.refs++
@@ -251,6 +303,15 @@ func (r *Relay) acquire(ctx context.Context, s *Session, kind RequestKind, ns Na
 		return nil, rt.err
 	}
 	return rt.t, nil
+}
+
+// admit reports whether the relay's budget and the share of s have room for one more track. Called with r.mu held.
+func (r *Relay) admit(s *Session) bool {
+	if r.cached.Load()+relayTrackOverhead > r.cfg.MaxCacheBytes {
+		return false
+	}
+	o := r.openers[s]
+	return o == nil || o.bytes.Load()+relayTrackOverhead <= r.share(len(r.openers))
 }
 
 // open subscribes upstream; the relay joins at the current group so late
@@ -278,7 +339,7 @@ func (rt *relayTrack) open(pub *Session, ns Namespace, name string) {
 		rt.drop(sink, up, &RequestError{Code: ReqInternalError})
 		return
 	}
-	t.relay = rt
+	t.relay, t.acct = rt, rt.acct
 	rt.r.mu.Lock()
 	if rt.refs == 0 {
 		// Every subscriber gave up while the upstream subscription opened:
@@ -372,9 +433,11 @@ func (r *Relay) removeLocked(rt *relayTrack) {
 		return
 	}
 	rt.counted = false
-	r.live--
-	if r.opened[rt.opener]--; r.opened[rt.opener] == 0 {
-		delete(r.opened, rt.opener)
+	rt.acct.release()
+	o := r.openers[rt.opener]
+	if o.tracks--; o.tracks == 0 {
+		delete(r.openers, rt.opener)
+		r.nOpeners.Add(-1)
 	}
 }
 

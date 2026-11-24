@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"errors"
-	"fmt"
 	"io"
 	"slices"
 	"sync"
@@ -328,36 +327,16 @@ func TestRelayNamespaces(t *testing.T) {
 	}
 }
 
-func TestRelayMaxTracks(t *testing.T) {
-	checkLeaks(t)
-	r := newRelay(t, &RelayConfig{MaxTracks: 2, MaxSessionTracks: 2})
-	ns := Namespace{"m"}
-	origin := newOrigin(t)
-	for i := range 3 {
-		mustTrack(t, origin, ns, fmt.Sprint(i), nil)
-	}
-	pub, _ := joinRelay(t, r, &Config{Origin: origin})
-	ctx := testCtx(t)
-	if _, err := pub.PublishNamespace(ctx, ns); err != nil {
-		t.Fatal(err)
-	}
-	peer, _ := joinRelay(t, r, nil)
-	for i := range 3 {
-		_, err := peer.Subscribe(ctx, ns, fmt.Sprint(i), nil)
-		if i < 2 && err != nil {
-			t.Fatal(err)
-		}
-		if i == 2 && requestCode(err) != ReqExcessiveLoad {
-			t.Fatalf("third track: %v", err)
-		}
-	}
-}
-
 func TestRelayConfig(t *testing.T) {
 	if _, err := NewRelay(&RelayConfig{Session: Config{Origin: newOrigin(t)}}); !errors.Is(err, ErrInvalidConfig) {
 		t.Fatal(err)
 	}
-	if _, err := NewRelay(&RelayConfig{MaxTracks: -1}); !errors.Is(err, ErrInvalidConfig) {
-		t.Fatal(err)
+	for _, cfg := range []RelayConfig{{MaxCacheBytes: -1}, {CacheBytes: 1 << 20, MaxCacheBytes: 1 << 20}, {MaxCacheBytes: 2 << 40}} {
+		if _, err := NewRelay(&cfg); !errors.Is(err, ErrInvalidConfig) {
+			t.Fatalf("%+v: %v", cfg, err)
+		}
+	}
+	if cfg := newRelay(t, nil).cfg; cfg.MaxCacheBytes != 1<<30 || cfg.MaxSessionFetches != 16 {
+		t.Fatalf("defaults %d, %d", cfg.MaxCacheBytes, cfg.MaxSessionFetches)
 	}
 }

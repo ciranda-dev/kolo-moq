@@ -35,16 +35,19 @@ func acceptSubscribe(t *testing.T, rp *rawPeer, d time.Duration) *kolotransport.
 }
 
 // liveTracks returns the tracks the relay maps by name, those it counts
-// against MaxTracks, and the sessions it counts against MaxSessionTracks.
+// against MaxCacheBytes, and the sessions that opened them.
 func liveTracks(r *Relay) (mapped, counted, sessions int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return len(r.tracks), r.live, len(r.opened)
+	for _, o := range r.openers {
+		counted += o.tracks
+	}
+	return len(r.tracks), counted, len(r.openers)
 }
 
 func released(r *Relay) bool {
 	m, c, s := liveTracks(r)
-	return m == 0 && c == 0 && s == 0
+	return m == 0 && c == 0 && s == 0 && r.cached.Load() == 0
 }
 
 // reAnnounce subscribes v1 to track t of a raw publisher and returns the
@@ -380,12 +383,12 @@ func TestTrackAttachAfterEndOfTrack(t *testing.T) {
 	}
 }
 
-// An ended track still counts against MaxTracks until its upstream
+// An ended track still counts against MaxCacheBytes until its upstream
 // subscription ends, so a publisher that never sends PUBLISH_DONE cannot
-// make the relay hold more tracks than MaxTracks.
+// make the relay hold more tracks than the budget allows.
 func TestRelayEndedTrackCountsUntilDone(t *testing.T) {
 	checkLeaks(t)
-	r := newRelay(t, &RelayConfig{MaxTracks: 1})
+	r := newRelay(t, &RelayConfig{CacheBytes: 1 << 10, MaxCacheBytes: relayTrackOverhead + 1<<10})
 	ns := Namespace{"re"}
 	rp, _ := rawPublisher(t, r, ns)
 	v1, _ := joinRelay(t, r, nil)
@@ -395,7 +398,7 @@ func TestRelayEndedTrackCountsUntilDone(t *testing.T) {
 	ctx := readCtx(t, 10*time.Second)
 	readN(t, ctx, sub1, 1)
 	if _, err := v2.Subscribe(ctx, ns, "t", nil); requestCode(err) != ReqExcessiveLoad {
-		t.Fatalf("SUBSCRIBE over MaxTracks: %v", err)
+		t.Fatalf("SUBSCRIBE over MaxCacheBytes: %v", err)
 	}
 	write(t, req, wire.MsgPublishDone, &wire.PublishDone{Status: uint64(DoneTrackEnded), StreamCount: 1})
 	fin()

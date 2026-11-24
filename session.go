@@ -62,6 +62,7 @@ type Session struct {
 	resetGroups   atomic.Uint64
 	expiredGroups atomic.Uint64
 	sentBytes     atomic.Uint64
+	buffered      atomic.Int64 // payload bytes queued for MaxSessionBufferedBytes, in every subscription of both sides
 }
 
 // SessionStats counts what this side sent and the groups it stopped sending, and says how far behind its sending is.
@@ -74,7 +75,7 @@ type SessionStats struct {
 	// QueueDelay is how long the oldest object still being sent or waiting has been held, across the subscribers of
 	// this session. It is zero when nothing waits; it grows while the path carries less than is published.
 	QueueDelay time.Duration
-	// ResetGroups counts subgroup streams reset because a subscriber's queue exceeded MaxBufferedGroups or MaxBufferedBytes, or because the subscriber stopped reading the stream for RequestTimeout.
+	// ResetGroups counts subgroup streams reset because a subscriber's queue exceeded MaxBufferedGroups, MaxBufferedBytes or MaxSessionBufferedBytes, or because the subscriber stopped reading the stream for RequestTimeout.
 	ResetGroups uint64
 	// ExpiredGroups counts subgroup streams reset with DELIVERY_TIMEOUT.
 	ExpiredGroups uint64
