@@ -37,7 +37,7 @@ type Config struct {
 	MaxBufferedGroups int
 	// MaxBufferedBytes caps the payload bytes queued for one subscription, on either side. Default 32 MiB or MaxObjectSize if larger, from MaxObjectSize to 64 GiB.
 	MaxBufferedBytes int64
-	// MaxSessionBufferedBytes caps the payload bytes queued for all of the session's subscriptions together, on either side, so MaxSubscriptions times MaxBufferedBytes is not the memory bound. The subscription that goes over drops its oldest groups. Default eight times MaxBufferedBytes, from MaxBufferedBytes to 64 GiB.
+	// MaxSessionBufferedBytes caps the payload bytes queued for all of the session's subscriptions together, on either side, so MaxSubscriptions times MaxBufferedBytes is not the memory bound. The subscription that holds the most drops its oldest groups, not the one that is pushing. Default eight times MaxBufferedBytes, eight subscriptions at their full size, from MaxBufferedBytes to 64 GiB.
 	MaxSessionBufferedBytes int64
 	// MaxNamespaces caps the namespaces one namespace subscription tracks, on either side. Default 1000, from 1 to 1000000.
 	MaxNamespaces int

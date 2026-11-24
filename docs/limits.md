@@ -18,7 +18,7 @@ material: the README does not repeat it.
 | `MaxNameLength` | 4096 | 1 to 4096 | A namespace plus track name in a request, in bytes; 4096 is the draft limit |
 | `MaxBufferedGroups` | 64 | 1 to 1000000 | Groups queued for one subscription, on both sides |
 | `MaxBufferedBytes` | 32 MiB, or `MaxObjectSize` if larger | `MaxObjectSize` to 64 GiB | Bytes queued for one subscription, on both sides |
-| `MaxSessionBufferedBytes` | 8 times `MaxBufferedBytes` (256 MiB) | `MaxBufferedBytes` to 64 GiB | Bytes queued for all of the session's subscriptions together, on both sides; the subscription that goes over drops its oldest groups. Without it `MaxSubscriptions` times `MaxBufferedBytes` (1000 times 32 MiB) would be the bound |
+| `MaxSessionBufferedBytes` | 8 times `MaxBufferedBytes` (256 MiB) | `MaxBufferedBytes` to 64 GiB | Bytes queued for all of the session's subscriptions together, on both sides; the subscription that holds the most drops its oldest groups, so one the application does not read cannot make the others lose objects. The default is eight subscriptions at their full `MaxBufferedBytes`. Without it `MaxSubscriptions` times `MaxBufferedBytes` (1000 times 32 MiB) would be the bound |
 | `MaxNamespaces` | 1000 | 1 to 1000000 | Namespaces one namespace subscription tracks, on both sides |
 | `MaxFetchBytes` | `MaxBufferedBytes` | `MaxObjectSize` to 64 GiB | Bytes of cached objects held at once for the peer's FETCHes and fills, and, in a relay, the objects buffered for its forwarded FETCHes. A FETCH beyond it is refused with `EXCESSIVE_LOAD`, a fill is skipped and a forwarded FETCH is reset |
 
@@ -41,7 +41,8 @@ closes the session, as section 8.7 requires.
 
 | Field | Default | Range | What it bounds |
 |---|---|---|---|
-| `RelayConfig.MaxCacheBytes` | 1 GiB | `CacheBytes` plus 50 KiB to 1 TiB | Memory of all relayed tracks together: their cached bytes (counted as for `CacheBytes`) and 50 KiB for each track itself, ended ones whose upstream subscription is still open included. A session's share is `MaxCacheBytes` divided by the sessions with tracks open, at least `CacheBytes` plus 50 KiB, the most one track can hold. A SUBSCRIBE that would open a track beyond the budget or the share is refused with `EXCESSIVE_LOAD`; a cache that grows past either drops its oldest objects. There is no cap on the number of tracks |
+| `RelayConfig.MaxCacheBytes` | 1 GiB | `CacheBytes` plus 50 KiB to 1 TiB | Memory of all relayed tracks together: their cached bytes (counted as for `CacheBytes`) and 50 KiB for each track itself (measured on darwin/arm64, see below), ended ones whose upstream subscription is still open included. A SUBSCRIBE that would open a track beyond the budget or the session's share is refused with `EXCESSIVE_LOAD`; a cache that grows past either drops its oldest objects, the newest included. There is no cap on the number of tracks |
+| `RelayConfig.MaxSessionCacheBytes` | A tenth of `MaxCacheBytes` (107 MB with the default), or `CacheBytes` plus 50 KiB if larger | `CacheBytes` plus 50 KiB to `MaxCacheBytes` | What the tracks one session opened may hold of `MaxCacheBytes`, so one session cannot take it all. A session's share is `MaxCacheBytes` divided by the sessions with tracks open, at least `CacheBytes` plus 50 KiB (the most one track can hold) and at most this. The tenth is the share the removed `MaxSessionTracks` gave (a tenth of `MaxTracks`). With the defaults one session opens about 2000 idle tracks, then its next SUBSCRIBE gets `EXCESSIVE_LOAD` while other sessions are still admitted |
 | `RelayConfig.MaxSessionFetches` | 16 | 1 to 1000000 | FETCHes of one session the relay forwards to publishers at once; more are refused with `EXCESSIVE_LOAD` |
 | `RelayConfig.CacheGroups` | 16 | 1 to 1000000 | Cache of each relayed track, as in `TrackOptions` |
 | `RelayConfig.CacheBytes` | 32 MiB | 1 KiB to 64 GiB | Cache of each relayed track, as in `TrackOptions` |
@@ -49,7 +50,7 @@ closes the session, as section 8.7 requires.
 | `RelayConfig.MaxResumeHeld` | 10000 (ten times the default `MaxRequests`) | 1 to 1000000 | Announcements held for ended sessions at once; one that does not fit is withdrawn with its session. Each costs its namespace (up to 4096 bytes), the peer key and a timer for `Resume`; the ended session is not kept |
 | `RelayConfig.MaxPeerResumeHeld` | The `Session`'s `MaxRequests` (1000), or `MaxResumeHeld` if lower | 1 to `MaxResumeHeld` | Announcements held for one peer key, so one key cannot fill `MaxResumeHeld` |
 
-The newest object of a track stays in its cache whatever the budget, so the relay can hold one object per track beyond `MaxCacheBytes`; `MaxObjectSize` bounds each. A session that is alone may use the whole budget, and its share shrinks as other sessions open tracks: its caches give bytes back when they next receive an object, and until then a new session may be refused. To raise the budget, set `MaxCacheBytes`; the default holds 20,000 idle tracks at the measured cost below, or 1000 tracks that each cache 1 MiB (sixteen groups of 64 KiB).
+Once the relay or a session is over its budget, the track that received the object drops its oldest cached objects, the newest included, so the cached bytes and the 50 KiB per track never exceed `MaxCacheBytes`, whatever the size of the objects. Live subscribers still get the object; a late joiner or a FETCH finds fewer groups, or none, until the next object. A session's share shrinks as other sessions open tracks: its caches give bytes back when they next receive an object, and until then a new session may be refused. To raise the budget, set `MaxCacheBytes` (and `MaxSessionCacheBytes` with it, as one session gets a tenth); the default holds 20,000 idle tracks at the measured cost below, or 1000 tracks that each cache 1 MiB (sixteen groups of 64 KiB).
 
 `RelayConfig.Session` is a `Config` that applies to every relay session; its
 `Origin` must be nil. Its `MaxFetchBytes` is the budget of each session, so a relay buffers at most that much per
@@ -66,7 +67,13 @@ subscriber for forwarded fetches.
 | Added by the relay, per track | 50,000 (three runs: 50,047, 50,046, 50,000) |
 | One idle session, relay side and client side together | 303,000 to 312,000 |
 
-Machine: Apple M5, 10 CPUs, 24 GiB, macOS (darwin/arm64), Go 1.27.4, load averages 9 to 11 from other work during the runs (the heap does not depend on it). The relay charges 50 KiB per relayed track against `MaxCacheBytes`, the measured 50,000 bytes rounded up. A session costs the relay at most the idle figure, about 300 KB; the relay does not cap sessions, the listener does.
+Machine: Apple M5, 10 CPUs, 24 GiB, macOS (darwin/arm64), Go 1.27.4, load averages 9 to 11 from other work during the runs (the heap does not depend on it). The relay charges 50 KiB per relayed track against `MaxCacheBytes`, the measured 50,000 bytes rounded up. The 50 KiB was measured on darwin/arm64 only; the heap of a track differs on other platforms, so run the test there if the budget matters.
+
+An idle session costs the relay about 300 KB; a busy one up to `MaxSessionBufferedBytes` plus `MaxFetchBytes` (288 MiB by default), and `MaxIncomingStreams` of kolo-transport (16) objects of up to `MaxObjectSize` (16 MiB) being received, 256 MiB. The relay does not cap sessions; the kolo-transport listener under kolo-secure does (`MaxConns`, 100 by default).
+
+## Worst case of a relay
+
+With the defaults: the cache and the tracks hold at most `MaxCacheBytes`, 1 GiB. Each session adds at most 288 MiB queued and fetched plus 256 MiB being received, 544 MiB (an object queued for subscribers is the one the cache holds, so this counts it twice at most). With `MaxConns` 100 that is 1 GiB + 100 x 544 MiB = 55,424 MiB, about 54 GiB, reached only if every session is hostile and busy at once. Lower `MaxCacheBytes`, `Session.MaxSessionBufferedBytes`, `Session.MaxObjectSize` or `MaxConns` to lower it; each term is linear in its field.
 
 ## Fixed values
 
@@ -92,7 +99,7 @@ Machine: Apple M5, 10 CPUs, 24 GiB, macOS (darwin/arm64), Go 1.27.4, load averag
 | `KeyringConfig.Retain` | 450ms | up to 1m | How long a replaced key still opens objects after the first object under its successor; kolo-media's playout drops later frames anyway |
 | `KeyringConfig.RetainMax` | `Retain` plus 400ms | `Retain` to 2m | How long a replaced key opens objects at most after its successor arrived, even if no object under the successor opens; 400 ms is kolo-media's hold for objects whose key is in flight |
 | `KeyringConfig.MaxSenders` | 0 (no cap) | 0 or more | Namespaces a Keyring holds keys for, if you set a cap; more `Receive` calls fail with `ErrTooManySenders`. Your application chooses which senders it receives, so no peer can add one |
-| `KeyringConfig.MaxKeyRate` | 64 per second | 1 to 1024 | Key messages per namespace per second; more are dropped and counted in `Stats`. A message costs 0.35 us to install, and the next object of each track re-derives its key at 2.7 us (Go benchmark, Apple M5, Go 1.27.4), up to 1024 tracks: 2.8 ms a message in the worst case, 0.18 of a core per namespace at 64 a second. Raise it only if a sender rotates faster, for example one `SetMembers` per join in a large call, or batch the joins in one `SetMembers` call |
+| `KeyringConfig.MaxKeyRate` | 64 per second | 1 to 1024 | Key messages per namespace per second; more are dropped and counted in `Stats`. A message costs 0.2 to 0.5 us to install (`BenchmarkKeyInstall`), and the next object of each track re-derives its key at 1.4 to 2.7 us (`BenchmarkTrackKey`; Apple M5, Go 1.27.4, load averages 11 to 15 from other work, the upper figure is used below), up to 1024 tracks: 2.8 ms a message in the worst case, 0.18 of a core per namespace at 64 a second. Raise it only if a sender rotates faster, for example one `SetMembers` per join in a large call, or batch the joins in one `SetMembers` call |
 | `KeyringConfig.ReplayGroups` | 64 | 1 to 1000000 | Groups an `Opener` accepts behind the newest of a Key ID |
 | `KeyringConfig.ReplayObjects` | 8192 | 1 to 1000000 | Entries of an `Opener`'s replay window, oldest groups dropped first |
 | `SenderConfig.MaxTracks` | 1024 | 1 to 1000000 | Tracks sealed under one key; one more rotates |

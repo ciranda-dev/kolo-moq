@@ -772,6 +772,11 @@ func (sub *Subscription) push(o *wire.Object, first bool) {
 		sub.relay.object(o, first)
 		return
 	}
+	sub.enqueue(o)
+	sub.s.shed()
+}
+
+func (sub *Subscription) enqueue(o *wire.Object) {
 	cfg := &sub.s.cfg
 	sub.mu.Lock()
 	defer sub.mu.Unlock()
@@ -785,14 +790,34 @@ func (sub *Subscription) push(o *wire.Object, first bool) {
 	sub.queue = append(sub.queue, queued{objectFromWire(o), n})
 	sub.addBytes(n)
 	sub.groups[o.Group]++
-	for len(sub.groups) > 0 && (len(sub.groups) > cfg.MaxBufferedGroups || sub.bytes > cfg.MaxBufferedBytes || sub.s.buffered.Load() > cfg.MaxSessionBufferedBytes) {
-		oldest := uint64(math.MaxUint64)
-		for g := range sub.groups {
-			oldest = min(oldest, g)
-		}
-		sub.dropGroup(oldest)
+	for (len(sub.groups) > cfg.MaxBufferedGroups || sub.bytes > cfg.MaxBufferedBytes) && sub.dropOldestLocked() {
 	}
 	sub.notify()
+}
+
+func (sub *Subscription) queuedBytes() int64 {
+	sub.mu.Lock()
+	defer sub.mu.Unlock()
+	return sub.bytes
+}
+
+func (sub *Subscription) dropOldest() bool {
+	sub.mu.Lock()
+	defer sub.mu.Unlock()
+	return sub.dropOldestLocked()
+}
+
+// dropOldestLocked drops the oldest queued group and reports whether there was one.
+func (sub *Subscription) dropOldestLocked() bool {
+	if len(sub.groups) == 0 {
+		return false
+	}
+	oldest := uint64(math.MaxUint64)
+	for g := range sub.groups {
+		oldest = min(oldest, g)
+	}
+	sub.dropGroup(oldest)
+	return true
 }
 
 // addBytes counts n more bytes (or fewer, if negative) queued for this subscription and for its session. Called with sub.mu held.

@@ -93,7 +93,9 @@ programs; both take the address and an identity key file as flags.
   than `MaxBufferedGroups` open subgroups or `MaxBufferedBytes` bytes (each
   object counts its payload, its properties and a fixed overhead), the
   oldest group's stream is reset with `EXCESSIVE_LOAD` for that subscriber
-  only.
+  only. All of a session's queues together stay within
+  `MaxSessionBufferedBytes`; over it, the subscriber that holds the most
+  loses its oldest group.
 
 ## Priorities
 
@@ -154,7 +156,9 @@ Delivery and cancellation:
   PUBLISH_DONE. Groups travel on separate streams, so a later group can
   arrive before an earlier one. A reader that falls more than
   `MaxBufferedGroups` groups or `MaxBufferedBytes` behind loses the oldest
-  groups (`Dropped`).
+  groups (`Dropped`), and so does the subscription of a session that holds
+  the most when the session's queues pass `MaxSessionBufferedBytes`: a
+  track nobody reads does not take the objects of the others.
 - After PUBLISH_DONE the subscription waits for the announced stream count,
   or at most the larger of `RequestTimeout` and the delivery timeouts, then
   ends. Once no stream it received is open, it waits for the missing ones
@@ -256,9 +260,13 @@ an End of Unknown Range marker instead of a false "does not exist".
   publisher.
 - A relay is configured with `RelayConfig`. `MaxCacheBytes` is the memory
   of all relayed tracks together, cached objects and a fixed cost for each
-  track, and each session may use its share of it (a SUBSCRIBE beyond
-  either gets `EXCESSIVE_LOAD`), so one subscriber cannot use it all. There
-  is no cap on the number of tracks. `MaxSessionFetches` caps the FETCHes of one session
+  track; a cache over it drops its oldest objects, the newest included, so
+  live subscribers get every object and a late joiner or a FETCH finds
+  less. A session may use its share of it, at most
+  `MaxSessionCacheBytes` (a tenth of `MaxCacheBytes` by default): a SUBSCRIBE
+  beyond the budget or the share gets `EXCESSIVE_LOAD`, so one subscriber
+  cannot use it all and other sessions are still admitted. There is no cap
+  on the number of tracks. `MaxSessionFetches` caps the FETCHes of one session
   forwarded to publishers at once. A forwarded FETCH is read at once into a
   buffer within the subscriber session's `MaxFetchBytes` (set in
   `RelayConfig.Session`), and reset with `EXCESSIVE_LOAD` when it overflows,
