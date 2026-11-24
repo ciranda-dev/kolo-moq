@@ -17,10 +17,15 @@ material: the README does not repeat it.
 | `MaxNamespaceFields` | 32 | 1 to 32 | Fields of a namespace in a request; 32 is the draft limit |
 | `MaxNameLength` | 4096 | 1 to 4096 | A namespace plus track name in a request, in bytes; 4096 is the draft limit |
 | `MaxBufferedGroups` | 64 | 1 to 1000000 | Groups queued for one subscription, on both sides |
-| `MaxBufferedBytes` | 32 MiB, or `MaxObjectSize` if larger | `MaxObjectSize` to 64 GiB | Bytes queued for one subscription, on both sides |
-| `MaxSessionBufferedBytes` | 8 times `MaxBufferedBytes` (256 MiB) | `MaxBufferedBytes` to 64 GiB | Bytes queued for all of the session's subscriptions together, on both sides; the subscription that holds the most drops its oldest groups, so one the application does not read cannot make the others lose objects. The default is eight subscriptions at their full `MaxBufferedBytes`. Without it `MaxSubscriptions` times `MaxBufferedBytes` (1000 times 32 MiB) would be the bound |
+| `MaxBufferedBytes` | 32 MiB, or `MaxObjectSize` if larger | `MaxObjectSize` to 512 PiB (see below) | Bytes queued for one subscription, on both sides |
+| `MaxSessionBufferedBytes` | 8 times `MaxBufferedBytes` (256 MiB) | `MaxBufferedBytes` to 512 PiB (see below) | Bytes queued for all of the session's subscriptions together, on both sides; the subscription that holds the most drops its oldest groups, so one the application does not read cannot make the others lose objects. The default is eight subscriptions at their full `MaxBufferedBytes`. Without it `MaxSubscriptions` times `MaxBufferedBytes` (1000 times 32 MiB) would be the bound |
 | `MaxNamespaces` | 1000 | 1 to 1000000 | Namespaces one namespace subscription tracks, on both sides |
-| `MaxFetchBytes` | `MaxBufferedBytes` | `MaxObjectSize` to 64 GiB | Bytes of cached objects held at once for the peer's FETCHes and fills, and, in a relay, the objects buffered for its forwarded FETCHes. A FETCH beyond it is refused with `EXCESSIVE_LOAD`, a fill is skipped and a forwarded FETCH is reset |
+| `MaxFetchBytes` | `MaxBufferedBytes` | `MaxObjectSize` to 512 PiB (see below) | Bytes of cached objects held at once for the peer's FETCHes and fills, and, in a relay, the objects buffered for its forwarded FETCHes. A FETCH beyond it is refused with `EXCESSIVE_LOAD`, a fill is skipped and a forwarded FETCH is reset |
+
+The byte budgets (`MaxBufferedBytes`, `MaxSessionBufferedBytes`, `MaxFetchBytes`, `TrackOptions.CacheBytes`,
+`RelayConfig.CacheBytes` and `RelayConfig.MaxCacheBytes`) have no maximum of their own. They stop at 2^59 - 1 bytes
+(about 512 PiB), a sixteenth of the int64 range, only so that a budget plus the charges in flight, or eight times
+`MaxBufferedBytes`, cannot overflow its int64 counter; memory is bounded by the values you set.
 
 A `MaxNamespaceFields` or `MaxNameLength` below the draft limit makes a
 request beyond it get `NOT_SUPPORTED`; a request beyond the draft limit
@@ -34,18 +39,18 @@ closes the session, as section 8.7 requires.
 | `OriginConfig.MaxObjectSize` | 16 MiB | 1 KiB to 1 GiB | An object payload written to the origin |
 | `TrackOptions.Priority` | 128 (`DefaultPriority`) | 0 to 255 | Publisher priority; lower is more urgent |
 | `TrackOptions.CacheGroups` | 16 | 1 to 1000000 | Newest groups kept for FETCH and late joiners |
-| `TrackOptions.CacheBytes` | 32 MiB | 1 KiB to 64 GiB | Payload bytes kept in the cache |
+| `TrackOptions.CacheBytes` | 32 MiB | 1 KiB to 512 PiB (see Config) | Payload bytes kept in the cache |
 | `TrackOptions` delivery timeouts | none | millisecond precision | A value below 1 ms is rounded up to 1 ms |
 
 ## Relay
 
 | Field | Default | Range | What it bounds |
 |---|---|---|---|
-| `RelayConfig.MaxCacheBytes` | 1 GiB | `CacheBytes` plus 50 KiB to 1 TiB | Memory of all relayed tracks together: their cached bytes (counted as for `CacheBytes`) and 50 KiB for each track itself (measured on darwin/arm64, see below), ended ones whose upstream subscription is still open included. A SUBSCRIBE that would open a track beyond the budget or the session's share is refused with `EXCESSIVE_LOAD`; a cache that grows past either drops its oldest objects, the newest included. There is no cap on the number of tracks |
+| `RelayConfig.MaxCacheBytes` | 1 GiB | `CacheBytes` plus 50 KiB to 512 PiB (see Config) | Memory of all relayed tracks together: their cached bytes (counted as for `CacheBytes`) and 50 KiB for each track itself (measured on darwin/arm64, see below), ended ones whose upstream subscription is still open included. A SUBSCRIBE that would open a track beyond the budget or the session's share is refused with `EXCESSIVE_LOAD`; a cache that grows past either drops its oldest objects, the newest included. There is no cap on the number of tracks |
 | `RelayConfig.MaxSessionCacheBytes` | A tenth of `MaxCacheBytes` (107 MB with the default), or `CacheBytes` plus 50 KiB if larger | `CacheBytes` plus 50 KiB to `MaxCacheBytes` | What the tracks one session opened may hold of `MaxCacheBytes`, so one session cannot take it all. A session's share is `MaxCacheBytes` divided by the sessions with tracks open, at least `CacheBytes` plus 50 KiB (the most one track can hold) and at most this. The tenth is the share the removed `MaxSessionTracks` gave (a tenth of `MaxTracks`). With the defaults one session opens about 2000 idle tracks, then its next SUBSCRIBE gets `EXCESSIVE_LOAD` while other sessions are still admitted |
 | `RelayConfig.MaxSessionFetches` | 16 | 1 to 1000000 | FETCHes of one session the relay forwards to publishers at once; more are refused with `EXCESSIVE_LOAD` |
 | `RelayConfig.CacheGroups` | 16 | 1 to 1000000 | Cache of each relayed track, as in `TrackOptions` |
-| `RelayConfig.CacheBytes` | 32 MiB | 1 KiB to 64 GiB | Cache of each relayed track, as in `TrackOptions` |
+| `RelayConfig.CacheBytes` | 32 MiB | 1 KiB to 512 PiB (see Config) | Cache of each relayed track, as in `TrackOptions` |
 | `RelayConfig.Resume` | 0 (off) | 1 s to 1 h | How long a publisher whose connection was lost keeps its announcements |
 | `RelayConfig.MaxResumeHeld` | 10000 (ten times the default `MaxRequests`) | 1 to 1000000 | Announcements held for ended sessions at once; one that does not fit is withdrawn with its session. Each costs its namespace (up to 4096 bytes), the peer key and a timer for `Resume`; the ended session is not kept |
 | `RelayConfig.MaxPeerResumeHeld` | The `Session`'s `MaxRequests` (1000), or `MaxResumeHeld` if lower | 1 to `MaxResumeHeld` | Announcements held for one peer key, so one key cannot fill `MaxResumeHeld` |
